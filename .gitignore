@@ -2,6 +2,7 @@
 .DS_Store
 
 # Xcode — the project is generated from project.yml (xcodegen generate)
+M7Volume.xcodeproj/
 M9Volume.xcodeproj/
 xcuserdata/
 *.xcuserstate
@@ -10,6 +11,7 @@ xcuserdata/
 .claude/
 
 # Local token persisted by the app
+.m7volume_token
 .m9volume_token
 
 # Build outputs

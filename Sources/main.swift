@@ -1,7 +1,7 @@
-// main.swift — M9 Volume (menu-bar agent)
+// main.swift — M7 Volume (menu-bar agent)
 //
 // Forwards the Mac keyboard's volume up / down / mute keys to a Samsung Smart
-// Monitor M9 over its Wi-Fi WebSocket remote. Menu-bar only, no Dock icon.
+// Monitor M7 / M70D over its Wi-Fi WebSocket remote. Menu-bar only, no Dock icon.
 //
 // This build adds:
 //   * IP auto-discovery (remembers last IP; sweeps the /24 to find the M9 by model)
@@ -21,13 +21,15 @@ import ServiceManagement
 // MARK: - WebSocket remote + discovery ---------------------------------------
 
 final class M9Remote: NSObject, URLSessionWebSocketDelegate {
-    static let clientName = "M9Volume"
-    static let modelKeyword = "M9"            // matched against the raw :8001 body — the hit
-                                              // is in device.name; modelName is a sales code
-    private let ipKey = "m9_last_ip"
-    private let wifiMacKey = "m9_wifi_mac"    // persisted for Wake-on-LAN across launches
+    static let clientName = "M7Volume"
+    /// Matched against the raw :8001 body. Sales-code modelName (LS32DM702…)
+    /// does not contain "M7"; the hit is in device.name / type ("Smart M70D",
+    /// "[TV] Samsung M7", "Samsung SmartTV").
+    static let modelKeywords = ["M7", "M70", "M8", "M9", "Smart Monitor", "SmartTV"]
+    private let ipKey = "m7_last_ip"
+    private let wifiMacKey = "m7_wifi_mac"    // persisted for Wake-on-LAN across launches
     private let tokenURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".m9volume_token")
+        .appendingPathComponent(".m7volume_token")
 
     /// Parsed from the :8001/api/v2/ probe. `wifiMac` feeds Wake-on-LAN; `powerState`
     /// ("on"/"standby") gates the guarded KEY_POWER on the auto-wake path.
@@ -49,6 +51,7 @@ final class M9Remote: NSObject, URLSessionWebSocketDelegate {
     private var sweeping = false
     private var wifiMac: String?
     private var waking = false                 // wake sequence in flight; toggled on main
+    private(set) var lastSweepFailed = false   // true after a /24 sweep found nothing
 
     override init() {
         super.init()
@@ -88,27 +91,49 @@ final class M9Remote: NSObject, URLSessionWebSocketDelegate {
         setIP(ip)
     }
 
-    /// GET http://IP:8001/api/v2/ — the raw-body `contains("M9")` test is the proven
-    /// identity check (the hit is in device.name, not the sales-code modelName). Also
-    /// parses wifiMac + PowerState. `nil` = not-an-M9 or unreachable.
-    private func probe(_ ip: String, timeout: TimeInterval = 2,
+    /// GET http://IP:8001/api/v2/ — identity is Samsung Smart Monitor / TV (M7/M70D
+    /// included). Also parses wifiMac + PowerState. `nil` = not a target or unreachable.
+    /// `requireMatch: false` accepts any :8001 JSON (manual IP).
+    private func probe(_ ip: String, timeout: TimeInterval = 2, requireMatch: Bool = true,
                        completion: @escaping (DeviceInfo?) -> Void) {
         guard let url = URL(string: "http://\(ip):8001/api/v2/") else { completion(nil); return }
         var req = URLRequest(url: url); req.timeoutInterval = timeout
         session.dataTask(with: req) { data, _, _ in
             guard let data = data,
-                  let body = String(data: data, encoding: .utf8),
-                  body.contains(Self.modelKeyword) else { completion(nil); return }
+                  let body = String(data: data, encoding: .utf8) else { completion(nil); return }
             let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            if requireMatch && !Self.isTargetMonitor(body, obj: obj) { completion(nil); return }
             let device = obj?["device"] as? [String: Any]
             completion(DeviceInfo(wifiMac: device?["wifiMac"] as? String,
                                   powerState: device?["PowerState"] as? String))
         }.resume()
     }
 
+    static func isTargetMonitor(_ body: String, obj: [String: Any]?) -> Bool {
+        let device = obj?["device"] as? [String: Any]
+        let type = ((device?["type"] as? String) ?? (obj?["type"] as? String) ?? "")
+        if type.range(of: "Samsung", options: .caseInsensitive) != nil { return true }
+        return modelKeywords.contains { body.range(of: $0, options: .caseInsensitive) != nil }
+    }
+
+    /// Settings "Connect IP": remember the address and try it even if the body
+    /// doesn't match the keyword list (covers odd M70D name strings).
+    func adoptManualIP(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        connected = false; connecting = false; task = nil; attempts = 0
+        lastSweepFailed = false
+        probe(trimmed, requireMatch: false) { [weak self] info in
+            guard let self = self else { return }
+            if let info = info { self.adopt(trimmed, info) } else { self.setIP(trimmed) }
+            self.connect()
+        }
+    }
+
     func sweep() {
         guard !sweeping, let base = Self.localSubnetBase() else { return }
         sweeping = true
+        lastSweepFailed = false
         DispatchQueue.main.async { self.onUpdate?() }      // shows "searching…"
         let group = DispatchGroup()
         let lock = NSLock()
@@ -124,8 +149,16 @@ final class M9Remote: NSObject, URLSessionWebSocketDelegate {
         group.notify(queue: .main) { [weak self] in
             guard let self = self else { return }
             self.sweeping = false
-            if let found = found { self.adopt(found.ip, found.info); self.attempts = 0; self.connect() }
-            else { self.onUpdate?() }
+            if let found = found {
+                self.adopt(found.ip, found.info); self.attempts = 0; self.connect()
+            } else {
+                self.lastSweepFailed = true
+                self.onUpdate?()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+                    guard let self, self.ip == nil, !self.sweeping else { return }
+                    self.sweep()
+                }
+            }
         }
     }
 
@@ -196,6 +229,7 @@ final class M9Remote: NSObject, URLSessionWebSocketDelegate {
                let d = obj["data"] as? [String: Any],
                let token = d["token"] as? String {
                 try? token.write(to: tokenURL, atomically: true, encoding: .utf8)
+                try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
             }
             connected = true; connecting = false; attempts = 0
             DispatchQueue.main.async { self.onUpdate?() }
@@ -441,8 +475,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var forwardingEnabled = true
     var remoteModeActive = false               // not persisted; starts off each launch
 
-    private let autoWakeKey = "m9_autowake"
-    private let forwardKeysKey = "m9_forward_keys"    // persists forwardingEnabled across launches
+    private let autoWakeKey = "m7_autowake"
+    private let forwardKeysKey = "m7_forward_keys"    // persists forwardingEnabled across launches
     private var autoWakeEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: autoWakeKey) }
         set { UserDefaults.standard.set(newValue, forKey: autoWakeKey) }
@@ -459,6 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     private var settingsStatusLabel: NSTextField?
     private var settingsMacLabel: NSTextField?
+    private var settingsIPField: NSTextField?
     private var forwardCheckbox: NSButton?
     private var autoWakeCheckbox: NSButton?
     private var loginCheckbox: NSButton?
@@ -513,15 +548,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusIcon() {
         guard let button = statusItem.button else { return }
         if remoteModeActive,
-           let img = symbol("av.remote.fill", "dpad", accessibility: "M9 Remote Mode") {
+           let img = symbol("av.remote.fill", "dpad", accessibility: "M7 Remote Mode") {
             button.image = img
             button.contentTintColor = nil
         } else if let img = symbol("tv.and.hifispeaker.fill", "display", "speaker.wave.2.fill",
-                                   accessibility: remoteModeActive ? "M9 Remote Mode" : "M9 Volume") {
+                                   accessibility: remoteModeActive ? "M7 Remote Mode" : "M7 Volume") {
             button.image = img
             button.contentTintColor = remoteModeActive ? .controlAccentColor : nil
         } else {
-            button.title = "M9"
+            button.title = "M7"
         }
     }
 
@@ -538,8 +573,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Menu-header / Settings status string. Shared so both surfaces read identically.
     private func statusString() -> String {
-        if let ip = remote.ip { return remote.connected ? "M9 — connected (\(ip))" : "M9 — \(ip) (offline)" }
-        return "M9 — searching…"
+        if let ip = remote.ip { return remote.connected ? "M7 — connected (\(ip))" : "M7 — \(ip) (offline)" }
+        if remote.lastSweepFailed { return "M7 — not found on this Wi‑Fi" }
+        return "M7 — searching…"
     }
 
     private func refreshMenu() {
@@ -551,7 +587,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(header)
 
         let trusted = AXIsProcessTrusted()
-        let fwd = NSMenuItem(title: "Forward volume keys to M9", action: #selector(toggleForwarding), keyEquivalent: "")
+        let fwd = NSMenuItem(title: "Forward volume keys to M7", action: #selector(toggleForwarding), keyEquivalent: "")
         fwd.state = (forwardingEnabled && trusted) ? .on : .off
         fwd.target = self
         menu.addItem(fwd)
@@ -599,7 +635,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.keyEquivalentModifierMask = [.command]     // display-only, like the nav items
         settings.target = self
         menu.addItem(settings)
-        let about = NSMenuItem(title: "About M9 Volume", action: #selector(showAbout), keyEquivalent: "")
+        let about = NSMenuItem(title: "About M7 Volume", action: #selector(showAbout), keyEquivalent: "")
         about.target = self
         menu.addItem(about)
         let q = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
@@ -626,7 +662,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             else { try SMAppService.mainApp.unregister() }
         } catch {
             let a = NSAlert(); a.messageText = "Launch at Login failed"
-            a.informativeText = "\(error.localizedDescription)\n\nThis works when run as M9Volume.app in /Applications."
+            a.informativeText = "\(error.localizedDescription)\n\nThis works when run as M7Volume.app in /Applications."
             a.runModal()
         }
     }
@@ -677,7 +713,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsStatusLabel = statusLabel
         settingsMacLabel = macLabel
 
-        let fwd = NSButton(checkboxWithTitle: "Forward volume keys to M9",
+        let ipRow = NSStackView()
+        ipRow.orientation = .horizontal
+        ipRow.spacing = 8
+        let ipField = NSTextField(string: remote.ip ?? "")
+        ipField.placeholderString = "192.168.x.x"
+        ipField.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        let applyIP = NSButton(title: "Connect IP", target: self, action: #selector(applyManualIP))
+        applyIP.bezelStyle = .rounded
+        settingsIPField = ipField
+        ipRow.addArrangedSubview(ipField)
+        ipRow.addArrangedSubview(applyIP)
+
+        let hint = NSTextField(wrappingLabelWithString:
+            "The M70D must join the same Wi‑Fi as this Mac. USB‑C video alone is not enough.")
+        hint.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 320
+
+        let fwd = NSButton(checkboxWithTitle: "Forward volume keys to M7",
                            target: self, action: #selector(forwardCheckboxChanged(_:)))
         let aw = NSButton(checkboxWithTitle: "Auto-wake monitor when the Mac wakes",
                           target: self, action: #selector(autoWakeCheckboxChanged(_:)))
@@ -693,7 +747,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shortcuts.isSelectable = false
         shortcuts.widthAnchor.constraint(equalToConstant: 320).isActive = true   // 360 − insets → wraps
 
-        for v in [settingsHeading("Monitor"), statusLabel, macLabel, rescanBtn,
+        for v in [settingsHeading("Monitor"), statusLabel, macLabel, ipRow, hint, rescanBtn,
                   settingsHeading("Options"), fwd, aw, login,
                   settingsHeading("Shortcuts"), shortcuts] {
             stack.addArrangedSubview(v)
@@ -712,7 +766,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: container.fittingSize),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "M9 Volume Settings"
+        window.title = "M7 Volume Settings"
         window.isReleasedWhenClosed = false
         window.contentView = container
         window.center()
@@ -730,7 +784,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshSettingsUI() {
         guard settingsWindow != nil else { return }
         settingsStatusLabel?.stringValue = statusString()
-        settingsMacLabel?.stringValue = UserDefaults.standard.string(forKey: "m9_wifi_mac") ?? "—"
+        settingsMacLabel?.stringValue = UserDefaults.standard.string(forKey: "m7_wifi_mac") ?? "—"
+        if settingsIPField?.currentEditor() == nil {
+            settingsIPField?.stringValue = remote.ip ?? settingsIPField?.stringValue ?? ""
+        }
         forwardCheckbox?.state = (forwardingEnabled && AXIsProcessTrusted()) ? .on : .off  // same gate as the menu
         autoWakeCheckbox?.state = autoWakeEnabled ? .on : .off
         loginCheckbox?.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
@@ -746,12 +803,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ]
         let credits = NSAttributedString(string:
             "Forwards the Mac keyboard's volume/mute keys and remote navigation to a " +
-            "Samsung Smart Monitor M9 over its Wi-Fi remote.\n\n" +
+            "Samsung Smart Monitor M7 / M70D over its Wi-Fi remote.\n\n" +
             "⌃⌥←↑↓→ navigate · ⌃⌥↩ OK · ⌃⌥⌫ Back · ⌃⌥H Home · ⌃⌥P Power · ⌃⌥R Remote Mode",
             attributes: attrs)
         NSApp.orderFrontStandardAboutPanel(options: [
             .credits: credits,
-            .applicationName: "M9 Volume",
+            .applicationName: "M7 Volume",
         ])
     }
     /// Smart power: toggle over the live socket, else run the wake sequence (WoL + guarded
@@ -761,6 +818,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { remote.wakeMonitor() }
     }
     @objc private func rescan()  { remote.rescan() }
+    @objc private func applyManualIP() {
+        remote.adoptManualIP(settingsIPField?.stringValue ?? "")
+    }
 
     private func toggleRemoteMode() {
         remoteModeActive.toggle()

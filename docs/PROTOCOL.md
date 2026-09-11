@@ -18,7 +18,7 @@ This is the channel that sends key presses.
 wss://<IP>:8002/api/v2/channels/samsung.remote.control?name=<base64-name>&token=<token>
 ```
 
-- `name` is a client label, **base64-encoded** (this app uses `M9Volume`).
+- `name` is a client label, **base64-encoded** (this app uses `M7Volume`).
 - **Self-signed TLS.** The monitor presents a self-signed certificate. Trust it in the
   URLSession auth challenge with `URLCredential(trust:)` — don't try to validate it.
 - **Token flow (first-run pairing):**
@@ -27,7 +27,7 @@ wss://<IP>:8002/api/v2/channels/samsung.remote.control?name=<base64-name>&token=
   3. On Allow, the granted token arrives in an `ms.channel.connect` event
      (`data.token` in the JSON).
   4. **Persist it** and append `&token=<token>` on every later connect.
-     This app stores it at `~/.m9volume_token`.
+     This app stores it at `~/.m7volume_token`.
 - An `unauthorized` message means the token was rejected — drop the connection and re-pair.
 
 ### Sending a key
@@ -122,9 +122,10 @@ No hardcoded IP — the monitor is found by sweep:
 1. Try the saved IP first (`m9_last_ip`).
 2. Otherwise sweep the local **/24**: derive the base from the Mac's **en0/en1** IPv4 address
    (via `getifaddrs`), then probe `http://<base>.1..254:8001/api/v2/` in parallel.
-3. **Match "M9" in the raw response body.** The hit is in **`device.name`**, *not*
-   `modelName` — the M9's `modelName` is a sales code that does **not** contain "M9". Keep the
-   match on the raw body; don't "fix" it to parse `modelName`.
+3. **Match Samsung Smart Monitor / TV in the raw response body.** Keywords: M7, M70,
+   M8, M9, Smart Monitor, SmartTV, or `device.type` containing Samsung. The M70D
+   `modelName` is a sales code (LS32DM702…) that does **not** contain "M7". Keep the
+   match on the raw body / type; don't "fix" it to parse `modelName`.
 
 Reconnect is proactive with exponential backoff (1→10 s), reconnects on system/display wake,
 and re-sweeps after repeated failures (the IP may have changed via DHCP).

@@ -1,13 +1,13 @@
-name: M9Volume
+name: M7Volume
 
 options:
-  bundleIdPrefix: com.omer
+  bundleIdPrefix: com.numan
   deploymentTarget:
     macOS: "13.0"
   createIntermediateGroups: true
 
 targets:
-  M9Volume:
+  M7Volume:
     type: application
     platform: macOS
     sources:
@@ -15,8 +15,8 @@ targets:
     info:
       path: Info.plist
       properties:
-        CFBundleName: M9Volume
-        CFBundleDisplayName: M9 Volume
+        CFBundleName: M7Volume
+        CFBundleDisplayName: M7 Volume
         CFBundleShortVersionString: "1.0"
         CFBundleVersion: "1"
         LSUIElement: true                # menu-bar agent: no Dock icon / main window
@@ -25,7 +25,7 @@ targets:
           NSAllowsArbitraryLoads: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.omer.m9volume
+        PRODUCT_BUNDLE_IDENTIFIER: com.numan.m7volume
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_HARDENED_RUNTIME: YES
@@ -34,6 +34,5 @@ targets:
         # "App Sandbox" capability in Xcode.
         CODE_SIGN_STYLE: Automatic
         # Set your Team ID so signing is stable and Accessibility / Launch-at-Login
-        # permissions persist across rebuilds. Find it in Xcode > Settings > Accounts,
-        # or: security find-identity -v -p codesigning   (the 10-char ID in the name).
+        # permissions persist across rebuilds.
         # DEVELOPMENT_TEAM: ABCDE12345

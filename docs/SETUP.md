@@ -1,7 +1,7 @@
-# M9 Volume — Setup Guide
+# M7 Volume — Setup Guide
 
-End-user setup for M9 Volume, the macOS menu-bar app that drives a Samsung Smart Monitor M9
-from the Mac keyboard. See [../README.md](../README.md) for the feature overview.
+End-user setup for M7 Volume, the macOS menu-bar app that drives a Samsung Smart Monitor M7
+/ M70D from the Mac keyboard. See [../README.md](../README.md) for the feature overview.
 
 ---
 
@@ -51,15 +51,15 @@ From the repo root:
 ./build.sh
 ```
 
-This builds a **signed** `M9Volume.app` into **/Applications**. Running from
+This builds a **signed** `M7Volume.app` into **/Applications**. Running from
 `/Applications` (a stable path) is what makes Launch at Login reliable — see the note below.
 
 ### Option B — manual (xcodegen + Xcode)
 
 ```sh
 brew install xcodegen        # one time
-xcodegen generate            # creates M9Volume.xcodeproj from project.yml
-open M9Volume.xcodeproj       # then set Signing > Team and build (Cmd+R)
+xcodegen generate            # creates M7Volume.xcodeproj from project.yml
+open M7Volume.xcodeproj       # then set Signing > Team and build (Cmd+R)
 ```
 
 In Xcode, set **Signing & Capabilities > Team** to a real Development Team before building.
@@ -95,7 +95,7 @@ Two one-time prompts appear:
    to:
 
    ```
-   ~/.m9volume_token
+   ~/.m7volume_token
    ```
 
    and reused on every later connection, so you're only asked once.
@@ -105,7 +105,7 @@ Two one-time prompts appear:
 ## 5. Verify it works
 
 - The menu-bar icon appears (a TV-and-speaker glyph). Click it — the header should read
-  **"M9 — connected (192.168.x.y)"** once discovery and pairing finish.
+  **"M7 — connected (192.168.x.y)"** once discovery and pairing finish.
 - Press the keyboard's **volume up / down** and **mute** keys — the monitor's volume changes,
   and the Mac's own volume HUD does **not** appear (the event is swallowed).
 - Menu > **Unmute** should reliably un-mute (it sends volume-up then volume-down; see the
@@ -189,7 +189,7 @@ If the monitor stops accepting the connection (you revoked the device on the TV,
 monitor, or see repeated "unauthorized"), delete the token and re-pair:
 
 ```sh
-rm ~/.m9volume_token
+rm ~/.m7volume_token
 ```
 
 Next connection triggers the monitor's **Allow** dialog again; accept it and a fresh token is
@@ -197,29 +197,29 @@ written.
 
 ### Inspecting persisted state
 
-The app stores its keys in `UserDefaults` under `com.omer.m9volume`:
+The app stores its keys in `UserDefaults` under `com.numan.m7volume`:
 
 ```sh
-defaults read com.omer.m9volume
+defaults read com.numan.m7volume
 ```
 
 | Key | Meaning |
 |---|---|
-| `m9_last_ip` | Last known monitor IP (discovery shortcut). |
-| `m9_wifi_mac` | Monitor Wi-Fi MAC, target for Wake-on-LAN. |
-| `m9_autowake` | Auto-wake toggle (default on). |
-| `m9_forward_keys` | Forward-volume-keys toggle (default on). |
+| `m7_last_ip` | Last known monitor IP (discovery shortcut). |
+| `m7_wifi_mac` | Monitor Wi-Fi MAC, target for Wake-on-LAN. |
+| `m7_autowake` | Auto-wake toggle (default on). |
+| `m7_forward_keys` | Forward-volume-keys toggle (default on). |
 
 Read a single key, e.g.:
 
 ```sh
-defaults read com.omer.m9volume m9_last_ip
+defaults read com.numan.m7volume m7_last_ip
 ```
 
 To force a clean rediscovery you can clear the saved IP (or just use **Rescan**):
 
 ```sh
-defaults delete com.omer.m9volume m9_last_ip
+defaults delete com.numan.m7volume m7_last_ip
 ```
 
-The pairing token is **not** in UserDefaults — it lives in `~/.m9volume_token`.
+The pairing token is **not** in UserDefaults — it lives in `~/.m7volume_token`.
